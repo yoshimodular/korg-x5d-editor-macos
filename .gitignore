@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# build output
+*.o
+*.dll
+*.exe
+
+# never commit anything of Korg's, nor sound data
+*.X5
+*.05R
+*.MLT
+*.mlt
+*.syx
+*.INI
+*.ini
+
+# capture / measurement leftovers
+sniff.bin*
+capture.syx

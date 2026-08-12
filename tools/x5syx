@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""
+x5syx - converts .X5 / .05R banks from the Korg editor to System Exclusive.
+
+Bank file layout (30891 bytes, verified):
+    0      862 bytes  editor header (not transmitted)
+    862    100 x 136  programs
+    14462  100 x 164  combinations
+    30862  29         global data
+
+SysEx produced (model 0x36 = 05R/W . X5 . X5D):
+    F0 42 3n 36 4C <100 programs, packed>       F7
+    F0 42 3n 36 4D <100 combinations, packed>   F7
+    F0 42 3n 36 55 <29 global bytes>            F7   (only with --global)
+
+The data goes out in Korg's 7->8 packing: for every 7 raw bytes, one byte
+carrying bit 7 of each of those 7 is transmitted, followed by the 7 bytes
+with bit 7 cleared.
+"""
+
+import sys, os, argparse
+
+HDR      = 862
+PROG_SZ, PROG_N   = 136, 100
+COMBI_SZ, COMBI_N = 164, 100
+GLOBAL_SZ         = 29
+BANK_SZ  = HDR + PROG_SZ*PROG_N + COMBI_SZ*COMBI_N + GLOBAL_SZ   # 30891
+
+PROG_OFF   = HDR
+COMBI_OFF  = PROG_OFF + PROG_SZ*PROG_N
+GLOBAL_OFF = COMBI_OFF + COMBI_SZ*COMBI_N
+
+F_PROG, F_COMBI, F_GLOBAL = 0x4C, 0x4D, 0x55
+
+
+def pack(data: bytes) -> bytes:
+    """Korg's 7->8 packing."""
+    out = bytearray()
+    for i in range(0, len(data), 7):
+        grp = data[i:i+7]
+        msb = 0
+        for j, b in enumerate(grp):
+            if b & 0x80:
+                msb |= 1 << j
+        out.append(msb)
+        out.extend(b & 0x7F for b in grp)
+    return bytes(out)
+
+
+def unpack(data: bytes) -> bytes:
+    """Inverse of pack(), for checking dumps captured from the synth."""
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        msb = data[i]; i += 1
+        for j in range(7):
+            if i >= len(data):
+                break
+            out.append(data[i] | (0x80 if msb & (1 << j) else 0))
+            i += 1
+    return bytes(out)
+
+
+def msg(chan: int, func: int, raw: bytes) -> bytes:
+    return bytes([0xF0, 0x42, 0x30 | (chan & 0x0F), 0x36, func]) + pack(raw) + b'\xF7'
+
+
+def names(data: bytes, off: int, size: int, n: int):
+    out = []
+    for i in range(n):
+        s = data[off + i*size: off + i*size + 10]
+        out.append(s.decode('latin1').rstrip())
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Convert .X5/.05R banks from the Korg editor to SysEx.")
+    ap.add_argument("bank", help=".X5 or .05R file")
+    ap.add_argument("-o", "--out", help="output .syx file "
+                                        "(default: next to the bank)")
+    ap.add_argument("-c", "--channel", type=int, default=1, metavar="N",
+                    help="global MIDI channel of the synth, 1-16 (def. 1)")
+    ap.add_argument("--only", choices=["prog", "combi", "global"], action="append",
+                    help="transmit only this part (repeatable). "
+                         "Default: programs + combinations")
+    ap.add_argument("--global", dest="glob", action="store_true",
+                    help="also include the 29 bytes of global data "
+                         "(CAREFUL: overwrites the synth's tuning and MIDI settings)")
+    ap.add_argument("--split", action="store_true",
+                    help="one .syx file per block instead of a single one")
+    ap.add_argument("-l", "--list", action="store_true",
+                    help="list the names in the bank and exit")
+    a = ap.parse_args()
+
+    if not 1 <= a.channel <= 16:
+        sys.exit("The channel must be between 1 and 16.")
+    chan = a.channel - 1
+
+    with open(a.bank, "rb") as f:
+        d = f.read()
+    if len(d) != BANK_SZ:
+        sys.exit(f"{a.bank}: size {len(d)}, expected {BANK_SZ} bytes. "
+                 "This does not look like a Korg editor bank.")
+
+    if a.list:
+        p = names(d, PROG_OFF, PROG_SZ, PROG_N)
+        c = names(d, COMBI_OFF, COMBI_SZ, COMBI_N)
+        print(f"{os.path.basename(a.bank)}\n")
+        print("PROGRAMS")
+        for i in range(0, PROG_N, 4):
+            print("  " + "  ".join(f"{i+k:3d} {p[i+k]:<11}"
+                                   for k in range(4) if i+k < PROG_N))
+        print("\nCOMBINATIONS")
+        for i in range(0, COMBI_N, 4):
+            print("  " + "  ".join(f"{i+k:3d} {c[i+k]:<11}"
+                                   for k in range(4) if i+k < COMBI_N))
+        return
+
+    want = a.only or ["prog", "combi"]
+    if a.glob and "global" not in want:
+        want.append("global")
+
+    blocks = []
+    if "prog" in want:
+        blocks.append(("prog", msg(chan, F_PROG,
+                                   d[PROG_OFF:PROG_OFF + PROG_SZ*PROG_N])))
+    if "combi" in want:
+        blocks.append(("combi", msg(chan, F_COMBI,
+                                    d[COMBI_OFF:COMBI_OFF + COMBI_SZ*COMBI_N])))
+    if "global" in want:
+        blocks.append(("global", msg(chan, F_GLOBAL,
+                                     d[GLOBAL_OFF:GLOBAL_OFF + GLOBAL_SZ])))
+
+    base = a.out or os.path.splitext(a.bank)[0] + ".syx"
+    stem, ext = os.path.splitext(base)
+
+    if a.split:
+        for tag, m in blocks:
+            path = f"{stem}-{tag}{ext}"
+            with open(path, "wb") as f:
+                f.write(m)
+            print(f"{path}  {len(m)} bytes  (func 0x{m[4]:02X})")
+    else:
+        data = b"".join(m for _, m in blocks)
+        with open(base, "wb") as f:
+            f.write(data)
+        detail = ", ".join(f"{t} 0x{m[4]:02X} {len(m)}B" for t, m in blocks)
+        print(f"{base}  {len(data)} bytes  [{detail}]  channel {a.channel}")
+
+
+if __name__ == "__main__":
+    main()

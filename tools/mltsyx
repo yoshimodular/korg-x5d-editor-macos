@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""
+mltsyx - extracts the System Exclusive out of the Korg editor's .MLT files.
+
+An .MLT is a Standard MIDI File (format 0) wrapping two SysEx messages:
+    F0 42 3n 36 68 <16 parts x 13 bytes, packed>   F7   multi setup
+    F0 42 3n 36 55 <29 global bytes, packed>       F7   global data
+
+Usage:  mltsyx <file.MLT|directory> [-o outdir] [--no-global] [--channel N]
+"""
+
+import sys, os, glob, argparse
+
+
+def smf_sysex(data: bytes):
+    """Returns the complete SysEx messages (F0...F7 included) of an SMF."""
+    if data[:4] != b"MThd":
+        raise ValueError("not a Standard MIDI File")
+    i = 8 + int.from_bytes(data[4:8], "big")
+    msgs = []
+
+    def varlen(p):
+        """Reads a variable-length number at p; returns (value, next_pos)."""
+        v = 0
+        while p < len(data) and data[p] & 0x80:
+            v = (v << 7) | (data[p] & 0x7F); p += 1
+        if p >= len(data):
+            raise ValueError("truncated file")
+        return (v << 7) | data[p], p + 1
+
+    while i < len(data) - 8:
+        if data[i:i+4] != b"MTrk":
+            break
+        # the Korg editor writes a track length one byte larger than the real
+        # content, so it has to be clamped to the size of the file
+        end = min(i + 8 + int.from_bytes(data[i+4:i+8], "big"), len(data))
+        i += 8
+        running = None
+        while i < end:
+            _, i = varlen(i)                       # delta time
+            if i >= end:
+                break
+            st = data[i]
+            if st in (0xF0, 0xF7):
+                i += 1
+                ln, i = varlen(i)
+                body = data[i:i+ln]; i += ln
+                if st == 0xF0:
+                    msgs.append(b"\xF0" + body)
+            elif st == 0xFF:
+                meta = data[i+1]; i += 2
+                ln, i = varlen(i)
+                i += ln
+                if meta == 0x2F:                   # end of track
+                    break
+            else:
+                if st & 0x80:
+                    running = st; i += 1
+                if running is None:
+                    break
+                i += 1 if (running & 0xF0) in (0xC0, 0xD0) else 2
+        i = end
+    return msgs
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Extract SysEx from Korg .MLT files.")
+    ap.add_argument("input", help=".MLT file, or a directory containing them")
+    ap.add_argument("-o", "--out", help="output directory")
+    ap.add_argument("--no-global", action="store_true",
+                    help="drop the 0x55 global block "
+                         "(leaves the synth's MIDI settings alone)")
+    ap.add_argument("-c", "--channel", type=int, metavar="N",
+                    help="rewrite the global MIDI channel, 1-16")
+    a = ap.parse_args()
+
+    if os.path.isdir(a.input):
+        files = sorted(glob.glob(os.path.join(a.input, "*.[Mm][Ll][Tt]")))
+    else:
+        files = [a.input]
+    if not files:
+        sys.exit("No .MLT files in " + a.input)
+
+    outdir = a.out or (a.input if os.path.isdir(a.input)
+                       else os.path.dirname(a.input))
+    os.makedirs(outdir, exist_ok=True)
+
+    ok = fail = 0
+    for f in files:
+        try:
+            msgs = smf_sysex(open(f, "rb").read())
+            if a.no_global:
+                msgs = [m for m in msgs if m[4] != 0x55]
+            if not msgs:
+                raise ValueError("no sysex")
+            if a.channel:
+                msgs = [m[:2] + bytes([0x30 | (a.channel - 1)]) + m[3:] for m in msgs]
+            dst = os.path.join(outdir,
+                               os.path.splitext(os.path.basename(f))[0] + ".syx")
+            with open(dst, "wb") as g:
+                g.write(b"".join(msgs))
+            ok += 1
+        except Exception as e:
+            print(f"  failed {os.path.basename(f)}: {e}", file=sys.stderr)
+            fail += 1
+    print(f"{ok} converted, {fail} failed -> {outdir}")
+
+
+if __name__ == "__main__":
+    main()
