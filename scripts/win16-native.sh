@@ -50,6 +50,12 @@ if [ "$DRY" = 1 ]; then
     exit 0
 fi
 
-# stop the wineserver and wait for it to flush the registry to disk
-sleep 2; pkill -f wineserver 2>/dev/null; sleep 3
+# Stop the wineserver and wait for it to flush the registry to disk -- only
+# this bottle's. `pkill -f wineserver` takes down every other CrossOver
+# application that happens to be open, unsaved work and all.
+sleep 2
+for w in $(pgrep -x wineserver 2>/dev/null); do
+    lsof -p "$w" 2>/dev/null | grep -qF "Bottles/$BOTTLE/" && kill "$w" 2>/dev/null
+done
+sleep 3
 echo "$n overrides written to \"$BOTTLE\"."

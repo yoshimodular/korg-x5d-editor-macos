@@ -118,7 +118,17 @@ int main(int argc, char **argv)
         }
     }
 
+    /* In watch mode we wait for the window to appear: the launcher starts this
+     * in parallel with the editor, and a cold bottle can take a good while to
+     * get as far as painting. Giving up here left the whole session with no
+     * repainting at all, silently. */
     EnumWindows(find_main, 0);
+    if (!editor_pid && watch) {
+        for (int i = 0; i < 120 && !editor_pid; i++) {   /* up to 60 s */
+            Sleep(500);
+            EnumWindows(find_main, 0);
+        }
+    }
     if (!editor_pid) {
         printf("No window found with \"%s\" in the title.\n", wanted);
         return 1;

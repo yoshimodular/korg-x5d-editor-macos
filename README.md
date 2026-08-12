@@ -204,8 +204,10 @@ redraw.exe -k           minimize and restore (the manual remedy)
 redraw.exe -t "text"    another window-title text (default: SoundEditor)
 ```
 
-It exits by itself when the editor closes, so it never becomes one of the
-leftover processes described above.
+In watch mode it waits up to 60 s for the editor's window to appear, so it can
+be started in parallel with the editor rather than after a guessed delay. It
+exits by itself when the editor closes, so it never becomes one of the leftover
+processes described above.
 
 ### `scripts/`
 

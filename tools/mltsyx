@@ -80,9 +80,13 @@ def main():
         files = [a.input]
     if not files:
         sys.exit("No .MLT files in " + a.input)
+    if a.channel is not None and not 1 <= a.channel <= 16:
+        sys.exit("The channel must be between 1 and 16.")
 
+    # os.path.dirname("file.MLT") is "", and os.makedirs("") raises: the most
+    # common case is precisely passing a bare filename
     outdir = a.out or (a.input if os.path.isdir(a.input)
-                       else os.path.dirname(a.input))
+                       else os.path.dirname(a.input)) or "."
     os.makedirs(outdir, exist_ok=True)
 
     ok = fail = 0

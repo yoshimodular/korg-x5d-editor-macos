@@ -19,20 +19,23 @@ BOTTLE="${1:-X5D Editor}"
 if [ "$BOTTLE" = "--all" ] || [ "$BOTTLE" = "--todas" ]; then
     PATTERN="Bottles/"
 else
-    PATTERN="Bottles/$BOTTLE"
+    # The trailing slash matters: without it "X5D Editor" also matched
+    # "X5D Editor 2" and killed the wrong bottle's processes.
+    PATTERN="Bottles/$BOTTLE/"
 fi
 
 killed=0
 for p in $(ps ax | grep "[.]exe" | awk '{print $1}'); do
-    # which bottle does this process belong to
-    if lsof -p "$p" 2>/dev/null | grep -q "$PATTERN"; then
+    # which bottle does this process belong to (-F: a bottle name is a literal
+    # path, not a regex; metacharacters in it would otherwise mis-match)
+    if lsof -p "$p" 2>/dev/null | grep -qF "$PATTERN"; then
         kill -9 "$p" 2>/dev/null && killed=$((killed + 1))
     fi
 done
 
 # that bottle's wineserver, if it was left loose
 for p in $(pgrep -x wineserver 2>/dev/null); do
-    if lsof -p "$p" 2>/dev/null | grep -q "$PATTERN"; then
+    if lsof -p "$p" 2>/dev/null | grep -qF "$PATTERN"; then
         kill -9 "$p" 2>/dev/null && killed=$((killed + 1))
     fi
 done
