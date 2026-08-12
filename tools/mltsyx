@@ -48,6 +48,8 @@ def smf_sysex(data: bytes):
                 if st == 0xF0:
                     msgs.append(b"\xF0" + body)
             elif st == 0xFF:
+                if i + 1 >= len(data):
+                    raise ValueError("file truncated inside a meta event")
                 meta = data[i+1]; i += 2
                 ln, i = varlen(i)
                 i += ln
@@ -97,6 +99,11 @@ def main():
                 msgs = [m for m in msgs if m[4] != 0x55]
             if not msgs:
                 raise ValueError("no sysex")
+            # A truncated .MLT yields a SysEx that opens F0 and never closes
+            # F7. Writing it and reporting success leaves the synth waiting
+            # mid-message -- exactly the failure that took half an afternoon.
+            if any(len(m) < 2 or m[-1] != 0xF7 for m in msgs):
+                raise ValueError("unterminated sysex (truncated file)")
             if a.channel:
                 msgs = [m[:2] + bytes([0x30 | (a.channel - 1)]) + m[3:] for m in msgs]
             dst = os.path.join(outdir,
@@ -108,6 +115,8 @@ def main():
             print(f"  failed {os.path.basename(f)}: {e}", file=sys.stderr)
             fail += 1
     print(f"{ok} converted, {fail} failed -> {outdir}")
+    if ok == 0 and fail:
+        sys.exit(1)   # so a script can detect total failure
 
 
 if __name__ == "__main__":

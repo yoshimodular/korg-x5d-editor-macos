@@ -97,8 +97,13 @@ def main():
         sys.exit("The channel must be between 1 and 16.")
     chan = a.channel - 1
 
-    with open(a.bank, "rb") as f:
-        d = f.read()
+    try:
+        with open(a.bank, "rb") as f:
+            d = f.read()
+    except IsADirectoryError:
+        sys.exit(f"{a.bank} is a directory; point at a bank file.")
+    except OSError as e:
+        sys.exit(f"Cannot read {a.bank}: {e.strerror}.")
     if len(d) != BANK_SZ:
         sys.exit(f"{a.bank}: size {len(d)}, expected {BANK_SZ} bytes. "
                  "This does not look like a Korg editor bank.")
